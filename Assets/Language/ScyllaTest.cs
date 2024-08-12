@@ -7,7 +7,7 @@ public class ScyllaTest : MonoBehaviour
     // Start is called before the first frame update
     void Start()
     {
-        Scylla.run("number a = }");
+        Scylla.run("sequence a= }\n");
     }
 
     // Update is called once per frame

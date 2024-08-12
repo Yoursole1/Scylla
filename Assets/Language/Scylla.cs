@@ -4,7 +4,7 @@ using System;
 
 public class Scylla
 {   
-    // Tokens need a type.  Keyword, identifier, numerical, operator, ect
+
 
     public static bool run(string code)
     {
@@ -13,20 +13,32 @@ public class Scylla
 
         foreach(Token token in tokens)
         {
-            Debug.Log(token.value);
+            Debug.Log(token.value + "-" + token.type);
         }
         return false;
+    }
+
+    public class ScyllaError : Exception
+    {
+        public ScyllaError(string message) : base(message) {}
+    }
+
+    public enum TokenType
+    {
+        KEYWORD, NUM, SEQ, IDENT, OPERATOR
     }
 
     public class Token
     {
         public string value { get; }
         public uint priority { get; }
+        public TokenType type { get; }
 
-        public Token(string value, uint priority)
+        public Token(string value, uint priority, TokenType type)
         {
             this.value = value;
             this.priority = priority;
+            this.type = type;
         }
     }
 
@@ -41,22 +53,22 @@ public class Scylla
         public IEnumerable<Token> tokenize()
         {
             List<Token> tokens = new List<Token>();
+            TokenFetcher fetcher = new TokenFetcher();
 
             for(int i = 0; i < this.code.Length; i++)
             {
                 char curr = this.code[i];
 
                 char next = (i == this.code.Length - 1) ? ' ' : this.code[i + 1];
-                Token t = TokenFetcher.get(curr, next);
-                if(t == null)
-                {
-                    continue;
-                }
+                Token t = fetcher.get(curr, next);
 
-                tokens.Add(t);
+                if(t != null)
+                {
+                    tokens.Add(t);
+                }
             }
 
-            if(TokenFetcher.fetch != "")
+            if(fetcher.fetch != "")
             {
                 //error tokenizing since there are charactors left over that were not parsed properly
             }
@@ -68,89 +80,159 @@ public class Scylla
     
     private class TokenFetcher
     {
+        private enum TokenFetcherState
+        {
+            IDENT_PRESPACE, IDENT_POSTSPACE, NUM, SEQ, NORM
+        }
         // ()+-/*{}[],= 
         // while number sequence
-        public static string fetch = "";
-        private static bool ident = false;
+        public string fetch { get; set; }
+        private TokenFetcherState state;
+        private TokenType? typeIfVarBuilding; // null unless currently initializing a variable, in which case it is the type of var
 
-        public static Token get(char curr, char next)
+
+        public TokenFetcher()
         {
+            this.fetch = "";
+            this.state = TokenFetcherState.NORM;
+        }
 
-            if (ident)
+        public Token get(char curr, char next)
+        {
+            
+            this.fetch += curr;
+
+            switch (this.state)
             {
-                if(next == '=')
-                {
-                    ident = false;
-                    fetch = "";
-                    return new Token("ident", 0); // find way to actually get an ident token without instantiation
-                }
-            }
-
-            if (curr == ' ')
-            {
-                return null;
-            }
-
-            fetch += curr;
-
-            bool fetchInTokens = false;
-            Token found = null;
-            foreach (Token t in TokenFetcher.tokens)
-            {
-                if(fetch == t.value)
-                {
-                    fetchInTokens = true;
-                    found = t;
-                    break;
-                }
-            }
-
-            if (fetchInTokens)
-            {
-                string nextFetch = fetch + next;
-                bool nextFetchInTokens = false;
-                foreach (Token t in TokenFetcher.tokens)
-                {
-                    if (nextFetch == t.value)
+                case TokenFetcherState.NORM:
                     {
-                        nextFetchInTokens = true;
+                        Token t = getToken(this.fetch);
+                        if(this.fetch == "number") 
+                        {
+                            this.state = TokenFetcherState.IDENT_PRESPACE;
+                            this.typeIfVarBuilding = TokenType.NUM;
+                        }else if(this.fetch == "sequence")
+                        {
+                            this.state = TokenFetcherState.IDENT_PRESPACE;
+                            this.typeIfVarBuilding = TokenType.SEQ;
+                        }
+
+                        if(this.fetch == "=")
+                        {
+                            switch (this.typeIfVarBuilding)
+                            {
+                                case TokenType.NUM:
+                                    {
+                                        this.state = TokenFetcherState.NUM;
+                                        break;
+                                    }
+                                case TokenType.SEQ:
+                                    {
+                                        this.state = TokenFetcherState.SEQ;
+                                        break;
+                                    }
+                            }
+                            this.typeIfVarBuilding = null;
+                        }
+
+                        if(t != null)
+                        {
+                            this.fetch = "";
+                        }
+
+                        return t;
                     }
-                }
-
-                if (!nextFetchInTokens)
-                {
-
-                    if (found.value == "number" || found.value == "sequence") // data type
+                    
+                case TokenFetcherState.IDENT_PRESPACE:
                     {
-                        ident = true;
+                        if(curr == ' ')
+                        {
+                            this.state = TokenFetcherState.IDENT_POSTSPACE;
+                        }
+                        else
+                        {
+                            throw new ScyllaError("Expected \" \" after type keyword");
+                        }
+                        return null;
                     }
+                case TokenFetcherState.IDENT_POSTSPACE:
+                    {
+                        string forbiddenChar = "!@#$%^&*()_+-{}[]:\";'<>?,./' ";
 
-                    fetch = "";
-                    return found;
+                        if(forbiddenChar.Contains(curr)){
+                            throw new ScyllaError("Invalid charactor in variable name: " + curr);
+                        }
+
+                        if(next == '=')
+                        {
+                            this.state = TokenFetcherState.NORM;
+
+                            Token t = new Token(this.fetch, 0, TokenType.IDENT);
+                            this.fetch = "";
+                            return t;
+                        }
+                        break;
+                    }
+                    
+                case TokenFetcherState.NUM:
+                    {
+                        if(next == '\n')
+                        {
+                            Token t = new Token(this.fetch, 0, TokenType.NUM);
+                            this.fetch = "";
+                            return t;
+                        }
+                        
+                        break;
+                    }
+                case TokenFetcherState.SEQ:
+                    {
+                        if (next == '\n')
+                        {
+                            Token t = new Token(this.fetch, 0, TokenType.SEQ);
+                            this.fetch = "";
+                            return t;
+                        }
+
+                        break;
+                    }
+            }
+
+            return null;
+        }
+
+        private static Token getToken(string name)
+        {
+            foreach(Token t in tokens)
+            {
+                if(t.value == name)
+                {
+                    return t;
                 }
             }
             return null;
         }
-        
+
         private static List<Token> tokens = new List<Token> {
-            new Token("(", 0),
-            new Token(")", 0),
-            new Token("+", 0),
-            new Token("-", 0),
-            new Token("/", 0),
-            new Token("*", 0),
-            new Token("{", 0),
-            new Token("}", 0),
-            new Token("[", 0),
-            new Token("]", 0),
-            new Token(",", 0),
-            new Token("=", 0),
+            new Token("(", 0, TokenType.KEYWORD),
+            new Token(")", 0, TokenType.KEYWORD),
+            new Token("+", 0, TokenType.OPERATOR),
+            new Token("-", 0, TokenType.OPERATOR),
+            new Token("/", 0, TokenType.OPERATOR),
+            new Token("*", 0, TokenType.OPERATOR),
+            new Token("{", 0, TokenType.KEYWORD),
+            new Token("}", 0, TokenType.KEYWORD),
+            new Token("[", 0, TokenType.KEYWORD),
+            new Token("]", 0, TokenType.KEYWORD),
+            new Token(",", 0, TokenType.KEYWORD),
+            new Token("=", 0, TokenType.KEYWORD),
+            new Token("\n", 0, TokenType.KEYWORD),
 
-            new Token("while", 0),
-            new Token("number", 0),
-            new Token("sequence", 0),
+            new Token("while", 0, TokenType.KEYWORD),
+            new Token("number", 0, TokenType.KEYWORD),
+            new Token("sequence", 0, TokenType.KEYWORD),
 
-            new Token("ident", 0)
+            
         }; 
     }
 }
